@@ -1,0 +1,31 @@
+﻿# Virtual Environment
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Large model files (too big for GitHub)
+*.pkl
+*.joblib
+
+# Data files (can be regenerated)
+data/X_train.pkl
+data/y_train.pkl
+data/X_test.pkl
+data/y_test.pkl
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

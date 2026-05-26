@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────
+# Customer Churn Prediction — Python Dependencies
+# Python >= 3.10 recommended
+# Install: pip install -r requirements.txt
+# ─────────────────────────────────────────────────────────────
+
+# Core data science
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.0
+
+# Machine learning
+scikit-learn==1.4.2
+xgboost==2.0.3
+
+# Hyperparameter tuning (optional — needed for --optuna flag)
+optuna==3.6.1
+
+# Model interpretability
+shap==0.45.0
+
+# Visualisation
+matplotlib==3.8.4
+seaborn==0.13.2
+
+# Model persistence
+joblib==1.4.2
+
+# API serving
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+python-multipart==0.0.9        # for UploadFile in FastAPI
+
+# Testing
+pytest==8.2.0
+pytest-cov==5.0.0
+httpx==0.27.0                  # for FastAPI test client
+
+# Notebooks (optional)
+jupyterlab==4.1.8
+ipykernel==6.29.4
+
+# Data storage
+pyarrow==16.0.0                # parquet support
+
+# Utilities
+tqdm==4.66.4
