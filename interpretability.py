@@ -1,11 +1,10 @@
 """
 interpretability.py
 ===================
-SHAP analysis for the tuned XGBoost model.
-Produces:
-  - Global feature importance (bar + beeswarm)
-  - Local explanation for a single prediction
-  - Dependence plots for top-3 features
+SHAP-style interpretability for the tuned XGBoost model.
+
+Uses XGBoost native pred_contribs=True to avoid
+SHAP/XGBoost 3.x base_score compatibility issues.
 
 Run:
     python interpretability.py
@@ -19,136 +18,293 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import joblib
 import shap
+import xgboost as xgb
 from pathlib import Path
 
-DATA_DIR  = Path("data")
+DATA_DIR = Path("data")
 MODEL_DIR = Path("models")
-FIG_DIR   = Path("reports/figures")
+FIG_DIR = Path("reports/figures")
+
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 
-plt.rcParams.update({
-    "figure.facecolor": "#0f1117", "axes.facecolor": "#1a1d27",
-    "axes.edgecolor": "#3a3f5c", "axes.labelcolor": "#c9d1e0",
-    "xtick.color": "#8a93b0", "ytick.color": "#8a93b0",
-    "text.color": "#c9d1e0",
-})
-
-# Max rows to compute SHAP on (speed vs completeness trade-off)
-SHAP_SAMPLE = 2_000
+SHAP_SAMPLE = 2000
 
 
 def run_shap_analysis():
-    print("\n🔍 Running SHAP interpretability analysis …\n")
 
-    model = joblib.load(MODEL_DIR / "best_model_tuned.joblib")
-    X_test = joblib.load(DATA_DIR / "X_test.pkl")
-    feature_names = joblib.load(MODEL_DIR / "feature_names.joblib")
-    y_test = joblib.load(DATA_DIR / "y_test.pkl")
+    print("\n🔍 Running SHAP interpretability analysis ...\n")
 
-    # Sample for speed
+    # ---------------------------------------------------------
+    # Load model and data
+    # ---------------------------------------------------------
+
+    model = joblib.load(
+        MODEL_DIR / "best_model_tuned.joblib"
+    )
+
+    X_test = joblib.load(
+        DATA_DIR / "X_test.pkl"
+    )
+
+    feature_names = joblib.load(
+        MODEL_DIR / "feature_names.joblib"
+    )
+
+    # ---------------------------------------------------------
+    # Sample test data
+    # ---------------------------------------------------------
+
     np.random.seed(42)
-    idx = np.random.choice(len(X_test), min(SHAP_SAMPLE, len(X_test)), replace=False)
+
+    idx = np.random.choice(
+        len(X_test),
+        min(SHAP_SAMPLE, len(X_test)),
+        replace=False
+    )
+
     X_sample = X_test[idx]
 
-    # Build explainer
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_sample)
+    # ---------------------------------------------------------
+    # XGBoost native SHAP contributions
+    # ---------------------------------------------------------
 
-    # XGBoost binary returns (n, features) for class 1 directly
-    if isinstance(shap_values, list):
-        sv = shap_values[1]
-    else:
-        sv = shap_values
+    booster = model.get_booster()
 
-    # ── 1. Bar plot — mean |SHAP| ──────────────────────────────────────────
+    dmatrix = xgb.DMatrix(X_sample)
+
+    contributions = booster.predict(
+        dmatrix,
+        pred_contribs=True
+    )
+
+    # Last column is the base value.
+    sv = contributions[:, :-1]
+    base_values = contributions[:, -1]
+
+    print(
+        f"Computed native XGBoost contributions: "
+        f"{sv.shape}"
+    )
+
+    # ---------------------------------------------------------
+    # 1. Global feature importance
+    # ---------------------------------------------------------
+
     mean_abs = np.abs(sv).mean(axis=0)
-    top_n = 20
+
+    top_n = min(20, len(feature_names))
+
     top_idx = np.argsort(mean_abs)[-top_n:][::-1]
-    top_names = [feature_names[i] for i in top_idx]
-    top_vals  = mean_abs[top_idx]
+
+    top_names = [
+        feature_names[i]
+        for i in top_idx
+    ]
+
+    top_vals = mean_abs[top_idx]
 
     fig, ax = plt.subplots(figsize=(10, 8))
-    colors = ["#7c6af7" if v > top_vals.mean() else "#5ce0b8" for v in top_vals]
-    ax.barh(top_names[::-1], top_vals[::-1], color=colors[::-1],
-            edgecolor="#0f1117")
-    ax.set_xlabel("Mean |SHAP Value|")
-    ax.set_title(f"Top {top_n} Features by Mean |SHAP|",
-                 fontsize=13, fontweight="bold", color="#e0e6f5")
+
+    ax.barh(
+        top_names[::-1],
+        top_vals[::-1]
+    )
+
+    ax.set_xlabel("Mean |SHAP Contribution|")
+
+    ax.set_title(
+        f"Top {top_n} Features by Mean |SHAP|"
+    )
+
     fig.tight_layout()
-    fig.savefig(FIG_DIR / "12_shap_bar.png", dpi=150, bbox_inches="tight")
+
+    fig.savefig(
+        FIG_DIR / "12_shap_bar.png",
+        dpi=150,
+        bbox_inches="tight"
+    )
+
     plt.close()
+
     print("  Saved 12_shap_bar.png")
 
-    # ── 2. Beeswarm / Summary plot ─────────────────────────────────────────
+    # ---------------------------------------------------------
+    # 2. SHAP beeswarm
+    # ---------------------------------------------------------
+
     shap.summary_plot(
-        sv, X_sample,
+        sv,
+        X_sample,
         feature_names=feature_names,
         max_display=20,
         show=False,
-        plot_type="dot",
+        plot_type="dot"
     )
-    plt.gcf().set_facecolor("#0f1117")
-    plt.title("SHAP Beeswarm — Feature Impact on Churn Probability",
-              color="#e0e6f5", fontsize=12)
-    plt.savefig(FIG_DIR / "13_shap_beeswarm.png", dpi=150, bbox_inches="tight",
-                facecolor="#0f1117")
+
+    plt.title(
+        "SHAP Beeswarm — Feature Impact on Churn"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        FIG_DIR / "13_shap_beeswarm.png",
+        dpi=150,
+        bbox_inches="tight"
+    )
+
     plt.close()
+
     print("  Saved 13_shap_beeswarm.png")
 
-    # ── 3. Dependence plots — top 3 features ──────────────────────────────
-    top3 = [feature_names[i] for i in np.argsort(mean_abs)[-3:][::-1]]
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    fig.suptitle("SHAP Dependence Plots — Top 3 Features",
-                 fontsize=13, fontweight="bold", color="#e0e6f5")
+    # ---------------------------------------------------------
+    # 3. Dependence plots
+    # ---------------------------------------------------------
 
-    for ax, feat in zip(axes, top3):
-        if feat not in feature_names:
-            continue
-        fi = feature_names.index(feat)
-        ax.scatter(X_sample[:, fi], sv[:, fi],
-                   c=sv[:, fi], cmap="RdBu_r", alpha=0.35, s=5)
-        ax.set_xlabel(feat, color="#c9d1e0")
-        ax.set_ylabel("SHAP value", color="#c9d1e0")
-        ax.axhline(0, color="white", lw=0.8, alpha=0.4)
-        ax.set_title(feat, color="#e0e6f5")
+    top3_idx = top_idx[:3]
+
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(18, 5)
+    )
+
+    fig.suptitle(
+        "SHAP Dependence Plots — Top 3 Features"
+    )
+
+    for ax, fi in zip(axes, top3_idx):
+
+        ax.scatter(
+            X_sample[:, fi],
+            sv[:, fi],
+            alpha=0.35,
+            s=8
+        )
+
+        ax.axhline(
+            0,
+            linewidth=0.8
+        )
+
+        ax.set_xlabel(
+            feature_names[fi]
+        )
+
+        ax.set_ylabel(
+            "SHAP contribution"
+        )
+
+        ax.set_title(
+            feature_names[fi]
+        )
 
     fig.tight_layout()
-    fig.savefig(FIG_DIR / "14_shap_dependence.png", dpi=150, bbox_inches="tight")
+
+    fig.savefig(
+        FIG_DIR / "14_shap_dependence.png",
+        dpi=150,
+        bbox_inches="tight"
+    )
+
     plt.close()
+
     print("  Saved 14_shap_dependence.png")
 
-    # ── 4. Single-prediction waterfall (high-risk customer) ───────────────
-    churn_probs = model.predict_proba(X_sample)[:, 1]
-    high_risk_i = np.argmax(churn_probs)
+    # ---------------------------------------------------------
+    # 4. Highest-risk customer
+    # ---------------------------------------------------------
 
-    exp = shap.Explanation(
-        values=sv[high_risk_i],
-        base_values=explainer.expected_value if not isinstance(
-            explainer.expected_value, list) else explainer.expected_value[1],
-        data=X_sample[high_risk_i],
-        feature_names=feature_names,
+    churn_probs = model.predict_proba(
+        X_sample
+    )[:, 1]
+
+    high_risk_i = np.argmax(
+        churn_probs
     )
-    shap.waterfall_plot(exp, max_display=15, show=False)
-    plt.gcf().set_facecolor("#0f1117")
-    plt.title("SHAP Waterfall — Highest-Risk Customer",
-              color="#e0e6f5", fontsize=11)
-    plt.savefig(FIG_DIR / "15_shap_waterfall.png", dpi=150, bbox_inches="tight",
-                facecolor="#0f1117")
+
+    high_risk_probability = churn_probs[
+        high_risk_i
+    ]
+
+    # ---------------------------------------------------------
+    # Create SHAP Explanation
+    # ---------------------------------------------------------
+
+    explanation = shap.Explanation(
+        values=sv[high_risk_i],
+        base_values=base_values[high_risk_i],
+        data=X_sample[high_risk_i],
+        feature_names=feature_names
+    )
+
+    shap.waterfall_plot(
+        explanation,
+        max_display=15,
+        show=False
+    )
+
+    plt.title(
+        f"SHAP Waterfall — Highest-Risk Customer "
+        f"({high_risk_probability:.1%} churn probability)"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        FIG_DIR / "15_shap_waterfall.png",
+        dpi=150,
+        bbox_inches="tight"
+    )
+
     plt.close()
+
     print("  Saved 15_shap_waterfall.png")
 
-    # ── 5. Print top churn drivers ────────────────────────────────────────
+    # ---------------------------------------------------------
+    # 5. Top churn drivers
+    # ---------------------------------------------------------
+
     driver_df = pd.DataFrame({
-        "Feature":         [feature_names[i] for i in top_idx],
-        "Mean |SHAP|":     top_vals.round(4),
-        "Direction":       ["↑ Increases churn" if sv[:, i].mean() > 0
-                            else "↓ Decreases churn" for i in top_idx],
+        "Feature": [
+            feature_names[i]
+            for i in top_idx
+        ],
+
+        "Mean |SHAP|": [
+            round(mean_abs[i], 4)
+            for i in top_idx
+        ],
+
+        "Direction": [
+            "↑ Increases churn"
+            if sv[:, i].mean() > 0
+            else "↓ Decreases churn"
+            for i in top_idx
+        ]
     })
-    print("\n  📊 Top Churn Drivers:\n")
-    print(driver_df.to_string(index=False))
-    driver_df.to_csv("reports/shap_top_drivers.csv", index=False)
-    print("\n  💾 Saved → reports/shap_top_drivers.csv")
-    print("\n✅  SHAP analysis complete.\n")
+
+    print("\n📊 Top Churn Drivers:\n")
+
+    print(
+        driver_df.to_string(
+            index=False
+        )
+    )
+
+    driver_df.to_csv(
+        "reports/shap_top_drivers.csv",
+        index=False
+    )
+
+    print(
+        "\n💾 Saved → "
+        "reports/shap_top_drivers.csv"
+    )
+
+    print(
+        "\n✅ SHAP analysis complete.\n"
+    )
 
 
 if __name__ == "__main__":
