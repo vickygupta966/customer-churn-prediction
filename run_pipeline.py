@@ -1,85 +1,72 @@
-"""
-run_pipeline.py
-===============
-End-to-end pipeline runner. Runs all steps in order.
+"""Run the complete customer churn training pipeline."""
 
-Usage:
-    python run_pipeline.py             # full pipeline
-    python run_pipeline.py --skip-eda  # skip EDA (faster)
-    python run_pipeline.py --optuna    # use Optuna for tuning
-"""
+from __future__ import annotations
 
-import sys
-import time
 import argparse
+import time
 
 
-def banner(text: str, width: int = 60):
-    print("\n" + "═" * width)
+def banner(text: str, width: int = 64) -> None:
+    print("\n" + "=" * width)
     print(f"  {text}")
-    print("═" * width)
+    print("=" * width)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--skip-eda", action="store_true")
-    parser.add_argument("--optuna",   action="store_true")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Customer churn ML pipeline")
+    parser.add_argument("--skip-eda", action="store_true", help="Skip EDA")
     args = parser.parse_args()
+    started = time.time()
 
-    t_start = time.time()
-
-    # ── Step 1: Generate dataset ────────────────────────────────────────────
-    banner("STEP 1 — Generate Synthetic Dataset")
+    banner("STEP 1 — Generate Dataset")
     from generate_dataset import generate_dataset
     generate_dataset()
 
-    # ── Step 2: EDA ─────────────────────────────────────────────────────────
-    if not args.skip_eda:
+    if args.skip_eda:
+        print("\n⏭ EDA skipped")
+    else:
         banner("STEP 2 — Exploratory Data Analysis")
         from eda import run_eda
         run_eda()
-    else:
-        print("\n⏭  EDA skipped (--skip-eda)")
 
-    # ── Step 3: Feature engineering ─────────────────────────────────────────
-    banner("STEP 3 — Feature Engineering")
+    banner("STEP 3 — Leakage-Safe Feature Engineering")
     from feature_engineering import run_feature_engineering
     run_feature_engineering()
 
-    # ── Step 4: Train all models ─────────────────────────────────────────────
-    banner("STEP 4 — Train & Evaluate All Models")
+    banner("STEP 4 — Cross-Validated Model Comparison")
     from train_models import train_all_models
     train_all_models()
 
-    # ── Step 5: Hyperparameter tuning ────────────────────────────────────────
-    banner("STEP 5 — Hyperparameter Tuning")
+    banner("STEP 5 — XGBoost Hyperparameter Tuning")
     from hyperparameter_tuning import run_tuning
-    run_tuning(use_optuna=args.optuna)
+    run_tuning()
 
-    # ── Step 6: Final evaluation ─────────────────────────────────────────────
-    banner("STEP 6 — Comprehensive Model Evaluation")
+    banner("STEP 6 — Optimize Classification Threshold")
+    from optimize_threshold import run_threshold_optimization
+    run_threshold_optimization()
+
+    banner("STEP 7 — Final Evaluation")
     from evaluate_model import run_evaluation
     run_evaluation()
 
-    # ── Step 7: SHAP interpretability ────────────────────────────────────────
-    banner("STEP 7 — SHAP Interpretability")
+    banner("STEP 8 — SHAP Interpretability")
     from interpretability import run_shap_analysis
     run_shap_analysis()
 
-    # ── Step 8: Demo prediction ───────────────────────────────────────────────
-    banner("STEP 8 — Demo Prediction")
+    banner("STEP 9 — Demo Predictions")
     from predict import ChurnPredictor, DEMO_CUSTOMERS
     predictor = ChurnPredictor()
     for customer in DEMO_CUSTOMERS:
         print(predictor.predict(customer))
 
-    elapsed = round(time.time() - t_start, 1)
-    banner(f"✅  Full pipeline complete in {elapsed}s")
-    print("\n  Outputs:")
-    print("    data/          → dataset + preprocessed splits")
-    print("    models/        → all trained models")
-    print("    reports/       → comparison CSV, SHAP drivers")
-    print("    reports/figures → all visualisation PNGs\n")
+    elapsed = round(time.time() - started, 1)
+    banner(f"Pipeline complete in {elapsed}s")
+    print("Artifacts:")
+    print("  data/                     train/test datasets")
+    print("  models/preprocessor.joblib")
+    print("  models/best_model_tuned.joblib")
+    print("  models/threshold.joblib")
+    print("  reports/                  evaluation outputs")
 
 
 if __name__ == "__main__":
