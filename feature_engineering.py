@@ -1,190 +1,183 @@
 """
-feature_engineering.py
-=======================
-Handles:
-  - Missing value imputation
-  - Categorical encoding
-  - Numeric scaling
-  - New derived features
-  - Train/test split
-  - Saving preprocessors as joblib artifacts
+Leakage-safe feature engineering and preprocessing for customer churn.
 
 Run:
     python feature_engineering.py
+
 Outputs:
-    data/X_train.pkl, data/X_test.pkl,
-    data/y_train.pkl, data/y_test.pkl,
+    data/X_train.pkl
+    data/X_test.pkl
+    data/y_train.pkl
+    data/y_test.pkl
+    data/X_train_raw.csv
+    data/X_test_raw.csv
+    data/y_train_raw.csv
+    data/y_test_raw.csv
     models/preprocessor.joblib
+    models/feature_names.joblib
+
+Important:
+    All data-dependent transformations are fitted on the training split only.
+    This keeps validation/test information out of the training process.
 """
 
-import warnings
-warnings.filterwarnings("ignore")
+from __future__ import annotations
 
-import pandas as pd
-import numpy as np
-import joblib
+import warnings
 from pathlib import Path
 
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
-from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+warnings.filterwarnings("ignore")
 
 SEED = 42
+TEST_SIZE = 0.20
 DATA_DIR = Path("data")
 MODEL_DIR = Path("models")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
+SERVICE_COLUMNS = [
+    "phone_service",
+    "online_security",
+    "online_backup",
+    "device_protection",
+    "tech_support",
+    "streaming_tv",
+    "streaming_movies",
+]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1.  Feature Engineering  (domain-driven new features)
-# ──────────────────────────────────────────────────────────────────────────────
+
+# -----------------------------------------------------------------------------
+# Row-level feature engineering only.
+# No dataset-wide statistics are calculated here.
+# -----------------------------------------------------------------------------
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Create meaningful new features without introducing data leakage.
+    """Create deterministic row-level churn features without target leakage."""
+    out = df.copy()
 
-    New features added
-    ------------------
-    avg_monthly_spend       : total_charges / tenure_months  (estimated average)
-    charge_per_service      : monthly_charges / num_services
-    num_services            : count of active add-on services
-    is_high_value           : monthly_charges > 75th-percentile
-    tenure_group            : categorical bucket of tenure
-    ticket_total            : tech + admin tickets combined
-    has_any_ticket          : binary flag — has raised ≥1 ticket
-    charge_x_tenure         : interaction term
-    low_satisfaction        : binary flag — satisfaction_score < 3
-    """
-    df = df.copy()
+    missing = [c for c in SERVICE_COLUMNS if c not in out.columns]
+    if missing:
+        raise ValueError(f"Missing required service columns: {missing}")
 
-    # Number of active services
-    service_cols = [
-        "phone_service", "online_security", "online_backup",
-        "device_protection", "tech_support", "streaming_tv", "streaming_movies",
-    ]
-    # Count binary "1" / "Yes"
-    def is_active(col_val):
-        return (col_val == "Yes") | (col_val == 1)
+    def is_active(series: pd.Series) -> pd.Series:
+        return series.eq("Yes") | series.eq(1)
 
-    df["num_services"] = sum(
-        is_active(df[c]).astype(int) for c in service_cols
+    out["num_services"] = sum(
+        is_active(out[c]).astype("int8") for c in SERVICE_COLUMNS
     )
 
-    # Average monthly spend
-    df["avg_monthly_spend"] = (
-        df["total_charges"].fillna(df["monthly_charges"] * df["tenure_months"])
-        / df["tenure_months"].replace(0, np.nan)
-    ).round(2)
+    tenure = pd.to_numeric(out["tenure_months"], errors="coerce")
+    monthly = pd.to_numeric(out["monthly_charges"], errors="coerce")
+    total = pd.to_numeric(out["total_charges"], errors="coerce")
 
-    # Charge per service (avoid division by zero)
-    df["charge_per_service"] = (
-        df["monthly_charges"] / df["num_services"].replace(0, np.nan)
-    ).fillna(df["monthly_charges"]).round(2)
+    out["avg_monthly_spend"] = (
+        total / tenure.replace(0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan)
 
-    # High-value customer flag
-    threshold = df["monthly_charges"].quantile(0.75)
-    df["is_high_value"] = (df["monthly_charges"] > threshold).astype(int)
+    out["charge_per_service"] = (
+        monthly / out["num_services"].replace(0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan)
 
-    # Tenure groups
-    bins = [0, 12, 24, 48, 72]
-    labels = ["0-12 mo", "13-24 mo", "25-48 mo", "49-72 mo"]
-    df["tenure_group"] = pd.cut(
-        df["tenure_months"], bins=bins, labels=labels, right=True
-    ).astype(str)
+    # Keep this as a row-level feature. The old implementation used the
+    # complete dataset's 75th percentile before splitting, which leaked test
+    # distribution information into training.
+    out["is_high_value"] = monthly
 
-    # Support ticket features
-    df["ticket_total"] = df["num_tech_tickets"] + df["num_admin_tickets"]
-    df["has_any_ticket"] = (df["ticket_total"] > 0).astype(int)
+    out["tenure_group"] = pd.cut(
+        tenure,
+        bins=[-np.inf, 12, 24, 48, np.inf],
+        labels=["0-12 mo", "13-24 mo", "25-48 mo", "49+ mo"],
+    ).astype("object")
 
-    # Interaction: high charge AND long tenure → usually loyal
-    df["charge_x_tenure"] = (df["monthly_charges"] * df["tenure_months"]).round(2)
+    tech = pd.to_numeric(out["num_tech_tickets"], errors="coerce")
+    admin = pd.to_numeric(out["num_admin_tickets"], errors="coerce")
+    out["ticket_total"] = tech + admin
+    out["has_any_ticket"] = (out["ticket_total"] > 0).astype("int8")
 
-    # Low satisfaction flag
-    df["low_satisfaction"] = (df["satisfaction_score"].fillna(3.5) < 3).astype(int)
+    out["charge_x_tenure"] = monthly * tenure
+    satisfaction = pd.to_numeric(out["satisfaction_score"], errors="coerce")
+    out["low_satisfaction"] = (satisfaction < 3).astype("int8")
 
-    return df
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 2.  Build sklearn ColumnTransformer
-# ──────────────────────────────────────────────────────────────────────────────
-def build_preprocessor(X: pd.DataFrame):
-    """
-    Returns a fitted ColumnTransformer that:
-      - imputes + scales numeric columns
-      - imputes + one-hot-encodes categorical columns
-    """
-    numeric_cols = X.select_dtypes(include=np.number).columns.tolist()
-    categorical_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
-
-    numeric_pipeline = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler()),
-    ])
-
-    categorical_pipeline = Pipeline([
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
-    ])
-
-    preprocessor = ColumnTransformer([
-        ("num", numeric_pipeline, numeric_cols),
-        ("cat", categorical_pipeline, categorical_cols),
-    ], remainder="drop")
-
-    return preprocessor, numeric_cols, categorical_cols
+    return out
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 3.  Main pipeline
-# ──────────────────────────────────────────────────────────────────────────────
+def build_preprocessor(X_train: pd.DataFrame) -> ColumnTransformer:
+    """Build a preprocessing transformer using training columns only."""
+    numeric_cols = X_train.select_dtypes(include=np.number).columns.tolist()
+    categorical_cols = X_train.select_dtypes(
+        include=["object", "category", "bool"]
+    ).columns.tolist()
+
+    numeric_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    categorical_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+        ]
+    )
+
+    return ColumnTransformer(
+        transformers=[
+            ("num", numeric_pipeline, numeric_cols),
+            ("cat", categorical_pipeline, categorical_cols),
+        ],
+        remainder="drop",
+    )
+
+
+def _feature_names(preprocessor: ColumnTransformer) -> list[str]:
+    """Return output feature names from a fitted ColumnTransformer."""
+    return preprocessor.get_feature_names_out().tolist()
+
+
 def run_feature_engineering(
     input_path: str = "data/customer_churn.csv",
-) -> tuple:
-    """
-    Full feature-engineering pipeline.
-
-    Returns
-    -------
-    X_train, X_test, y_train, y_test  (as numpy arrays),
-    preprocessor (fitted ColumnTransformer),
-    feature_names (list[str])
-    """
-    print("\n🔧 Running Feature Engineering …\n")
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, ColumnTransformer, list[str]]:
+    """Split first, then fit all preprocessing on training data only."""
+    print("\n🔧 Running leakage-safe feature engineering …\n")
 
     df = pd.read_csv(input_path)
-    df = engineer_features(df)
-    print(f"  Features after engineering: {df.shape[1]-2}")  # minus id & target
+    required = {"customer_id", "churn"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Dataset is missing required columns: {sorted(missing)}")
 
-    # Drop identifiers; separate target
-    drop_cols = ["customer_id", "churn"]
-    X = df.drop(columns=drop_cols)
-    y = df["churn"].values
+    df = engineer_features(df)
+    X = df.drop(columns=["customer_id", "churn"])
+    y = pd.to_numeric(df["churn"], errors="raise").astype(int).to_numpy()
 
     X_train_raw, X_test_raw, y_train, y_test = train_test_split(
-        X, y, test_size=0.20, random_state=SEED, stratify=y
+        X,
+        y,
+        test_size=TEST_SIZE,
+        random_state=SEED,
+        stratify=y,
     )
-    print(f"  Train size : {len(X_train_raw):,}  |  Test size : {len(X_test_raw):,}")
-    print(f"  Train churn rate : {y_train.mean():.2%}")
-    print(f"  Test  churn rate : {y_test.mean():.2%}")
 
-    preprocessor, num_cols, cat_cols = build_preprocessor(X_train_raw)
+    preprocessor = build_preprocessor(X_train_raw)
     X_train = preprocessor.fit_transform(X_train_raw)
     X_test = preprocessor.transform(X_test_raw)
+    feature_names = _feature_names(preprocessor)
 
-    # Recover feature names (for SHAP, etc.)
-    cat_feature_names = (
-        preprocessor.named_transformers_["cat"]
-        .named_steps["encoder"]
-        .get_feature_names_out(cat_cols)
-        .tolist()
-    )
-    feature_names = num_cols + cat_feature_names
+    print(f"  Train size: {len(X_train_raw):,} | Test size: {len(X_test_raw):,}")
+    print(f"  Train churn rate: {y_train.mean():.2%}")
+    print(f"  Test churn rate : {y_test.mean():.2%}")
+    print(f"  Encoded features: {len(feature_names):,}")
 
-    print(f"  Total features after encoding : {len(feature_names)}")
-
-    # Save artefacts
     joblib.dump(X_train, DATA_DIR / "X_train.pkl")
     joblib.dump(X_test, DATA_DIR / "X_test.pkl")
     joblib.dump(y_train, DATA_DIR / "y_train.pkl")
@@ -192,13 +185,12 @@ def run_feature_engineering(
     joblib.dump(preprocessor, MODEL_DIR / "preprocessor.joblib")
     joblib.dump(feature_names, MODEL_DIR / "feature_names.joblib")
 
-    # Also save raw split (needed for SHAP with tree models)
-    X_train_raw.reset_index(drop=True).to_csv(DATA_DIR / "X_train_raw.csv")
-    X_test_raw.reset_index(drop=True).to_csv(DATA_DIR / "X_test_raw.csv")
-    pd.Series(y_train).to_csv(DATA_DIR / "y_train_raw.csv")
-    pd.Series(y_test).to_csv(DATA_DIR / "y_test_raw.csv")
+    X_train_raw.reset_index(drop=True).to_csv(DATA_DIR / "X_train_raw.csv", index=False)
+    X_test_raw.reset_index(drop=True).to_csv(DATA_DIR / "X_test_raw.csv", index=False)
+    pd.Series(y_train, name="churn").to_csv(DATA_DIR / "y_train_raw.csv", index=False)
+    pd.Series(y_test, name="churn").to_csv(DATA_DIR / "y_test_raw.csv", index=False)
 
-    print("\n✅  Saved preprocessor + train/test splits to data/ and models/")
+    print("\n✅ Preprocessor and train/test artifacts saved.")
     return X_train, X_test, y_train, y_test, preprocessor, feature_names
 
 
