@@ -1,21 +1,21 @@
 Feature,Mean |SHAP|,Direction
-contract_type_Month-to-Month,0.5803,↓ Decreases churn
-tenure_months,0.4736,↓ Decreases churn
-satisfaction_score,0.3155,↓ Decreases churn
-internet_service_Fiber Optic,0.2145,↓ Decreases churn
-num_tech_tickets,0.1521,↓ Decreases churn
-avg_monthly_spend,0.1348,↓ Decreases churn
-monthly_charges,0.0889,↓ Decreases churn
-age,0.0771,↓ Decreases churn
-tech_support_No,0.0695,↓ Decreases churn
-payment_method_Electronic Check,0.0681,↓ Decreases churn
-tenure_group_49-72 mo,0.068,↓ Decreases churn
-low_satisfaction,0.0561,↓ Decreases churn
-online_security_No,0.0542,↓ Decreases churn
-tenure_group_0-12 mo,0.0509,↓ Decreases churn
-charge_x_tenure,0.0496,↓ Decreases churn
-tech_support_Yes,0.0438,↑ Increases churn
-charge_per_service,0.0365,↓ Decreases churn
-total_charges,0.0362,↓ Decreases churn
-ticket_total,0.0339,↓ Decreases churn
-contract_type_One Year,0.0304,↓ Decreases churn
+cat__contract_type_Month-to-Month,0.6198,↓ Decreases churn
+num__tenure_months,0.5606,↓ Decreases churn
+num__satisfaction_score,0.351,↓ Decreases churn
+cat__internet_service_Fiber Optic,0.2431,↓ Decreases churn
+num__num_tech_tickets,0.1744,↓ Decreases churn
+num__avg_monthly_spend,0.12,↓ Decreases churn
+num__monthly_charges,0.1087,↓ Decreases churn
+cat__tech_support_No,0.0921,↓ Decreases churn
+num__age,0.0917,↓ Decreases churn
+cat__payment_method_Electronic Check,0.0874,↓ Decreases churn
+num__charge_x_tenure,0.0519,↓ Decreases churn
+cat__online_security_No,0.0504,↓ Decreases churn
+num__charge_per_service,0.0471,↓ Decreases churn
+num__ticket_total,0.0443,↓ Decreases churn
+cat__tech_support_Yes,0.0442,↑ Increases churn
+num__total_charges,0.042,↓ Decreases churn
+cat__online_security_Yes,0.0409,↓ Decreases churn
+num__low_satisfaction,0.0384,↓ Decreases churn
+num__data_usage_gb,0.0243,↓ Decreases churn
+cat__contract_type_Two Year,0.0229,↓ Decreases churn

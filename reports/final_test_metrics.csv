@@ -1,0 +1,2 @@
+model,threshold,accuracy,precision,recall,f1,roc_auc,true_negative,false_positive,false_negative,true_positive,default_threshold,default_f1,default_precision,default_recall,evaluation_dataset
+LogisticRegression,0.5399999999999998,0.7438,0.5282,0.7162,0.608,0.81,2180,710,315,795,0.5,0.6037,0.5006,0.7604,untouched test set

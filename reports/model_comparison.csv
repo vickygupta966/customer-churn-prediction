@@ -1,5 +1,5 @@
-Model,Accuracy,Precision,Recall,F1,ROC-AUC,Train Time (s)
-Logistic Regression,0.7775,0.6378,0.4586,0.5335,0.8101,0.26
-Random Forest,0.7502,0.5414,0.6541,0.5924,0.7968,4.27
-XGBoost,0.715,0.4906,0.7063,0.579,0.7948,3.14
-Neural Network,0.77,0.6203,0.4414,0.5158,0.8008,5.33
+Rank,Model,CV ROC-AUC Mean,CV ROC-AUC Std,Accuracy,Precision,Recall,F1,ROC-AUC,Train Time (s)
+1,Logistic Regression,0.8075,0.0049,0.7232,0.5009,0.7604,0.6039,0.81,4.71
+2,Neural Network,0.7981,0.0036,0.77,0.6193,0.4441,0.5173,0.8013,12.13
+3,Random Forest,0.796,0.0044,0.7475,0.5374,0.6477,0.5874,0.7957,29.69
+4,XGBoost,0.7898,0.0069,0.716,0.4918,0.7054,0.5796,0.7917,12.43

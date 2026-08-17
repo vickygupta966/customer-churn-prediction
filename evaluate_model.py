@@ -1,178 +1,240 @@
-"""Evaluate the tuned churn model on the untouched test set.
+"""
+Final evaluation of the production churn model.
 
-The classification threshold is loaded from models/threshold.joblib, where it
-was selected using out-of-fold training predictions. This module never chooses
-or overwrites the threshold using the test set.
-
-Run:
-    python evaluate_model.py
+Important:
+- Model was selected/tuned using training data only.
+- Threshold was selected using out-of-fold training predictions only.
+- The final test set is used here ONCE for final evaluation.
+- Test set is never used for model/threshold selection.
 """
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 import joblib
-import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.calibration import calibration_curve
+import pandas as pd
+
 from sklearn.metrics import (
     accuracy_score,
-    average_precision_score,
-    brier_score_loss,
     classification_report,
     confusion_matrix,
-    ConfusionMatrixDisplay,
     f1_score,
-    precision_recall_curve,
     precision_score,
     recall_score,
     roc_auc_score,
-    roc_curve,
 )
 
-warnings.filterwarnings("ignore")
+SEED = 42
 
 DATA_DIR = Path("data")
 MODEL_DIR = Path("models")
-FIG_DIR = Path("reports/figures")
-FIG_DIR.mkdir(parents=True, exist_ok=True)
+REPORT_DIR = Path("reports")
+
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_artifacts():
-    model = joblib.load(MODEL_DIR / "best_model_tuned.joblib")
+def evaluate_final_model():
+    print("\n" + "=" * 70)
+    print("🎯 FINAL PRODUCTION MODEL EVALUATION")
+    print("=" * 70)
+
+    # ---------------------------------------------------------
+    # 1. Load untouched test data
+    # ---------------------------------------------------------
+
     X_test = joblib.load(DATA_DIR / "X_test.pkl")
     y_test = joblib.load(DATA_DIR / "y_test.pkl")
 
+    print("\n📦 Test Data")
+    print("-" * 70)
+    print(f"X_test shape : {X_test.shape}")
+    print(f"y_test shape : {y_test.shape}")
+
+    # ---------------------------------------------------------
+    # 2. Load final production model
+    # ---------------------------------------------------------
+
+    model = joblib.load(MODEL_DIR / "best_model_tuned.joblib")
+
+    # ---------------------------------------------------------
+    # 3. Load optimized threshold
+    # ---------------------------------------------------------
+
     threshold_artifact = joblib.load(MODEL_DIR / "threshold.joblib")
-    if isinstance(threshold_artifact, dict):
-        threshold = float(threshold_artifact["threshold"])
-    else:
-        threshold = float(threshold_artifact)
 
-    return model, X_test, y_test, threshold
+    threshold = float(threshold_artifact["threshold"])
 
+    print("\n🤖 Production Model")
+    print("-" * 70)
+    print(f"Model     : {type(model).__name__}")
+    print(f"Threshold : {threshold:.2f}")
 
-def full_evaluation(model, X_test, y_test, threshold):
+    # ---------------------------------------------------------
+    # 4. Generate probability predictions
+    # ---------------------------------------------------------
+
     y_proba = model.predict_proba(X_test)[:, 1]
+
+    # IMPORTANT:
+    # Use optimized production threshold instead of 0.50.
     y_pred = (y_proba >= threshold).astype(int)
 
-    print("\n" + "═" * 60)
-    print("  FINAL TEST-SET MODEL EVALUATION")
-    print("═" * 60)
-    print(f"\n  Classification threshold : {threshold:.2f}")
-    print(f"  Accuracy                 : {accuracy_score(y_test, y_pred):.4f}")
-    print(f"  ROC-AUC                  : {roc_auc_score(y_test, y_proba):.4f}")
-    print(f"  Average Precision        : {average_precision_score(y_test, y_proba):.4f}")
-    print(f"  Brier Score              : {brier_score_loss(y_test, y_proba):.4f}")
-    print(f"  Churn Precision          : {precision_score(y_test, y_pred, zero_division=0):.4f}")
-    print(f"  Churn Recall             : {recall_score(y_test, y_pred, zero_division=0):.4f}")
-    print(f"  Churn F1                 : {f1_score(y_test, y_pred, zero_division=0):.4f}")
-    print("\n  Classification Report:")
+    # ---------------------------------------------------------
+    # 5. Calculate final metrics
+    # ---------------------------------------------------------
+
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, zero_division=0)
+    recall = recall_score(y_test, y_pred, zero_division=0)
+    f1 = f1_score(y_test, y_pred, zero_division=0)
+    roc_auc = roc_auc_score(y_test, y_proba)
+
+    # ---------------------------------------------------------
+    # 6. Confusion Matrix
+    # ---------------------------------------------------------
+
+    cm = confusion_matrix(y_test, y_pred)
+
+    tn, fp, fn, tp = cm.ravel()
+
+    # ---------------------------------------------------------
+    # 7. Print results
+    # ---------------------------------------------------------
+
+    print("\n" + "=" * 70)
+    print("📊 FINAL TEST RESULTS")
+    print("=" * 70)
+
+    print(f"\nThreshold : {threshold:.2f}")
+
+    print(f"\nAccuracy  : {accuracy:.4f}")
+    print(f"Precision : {precision:.4f}")
+    print(f"Recall    : {recall:.4f}")
+    print(f"F1 Score  : {f1:.4f}")
+    print(f"ROC-AUC   : {roc_auc:.4f}")
+
+    print("\n" + "-" * 70)
+    print("CONFUSION MATRIX")
+    print("-" * 70)
+
+    print(cm)
+
+    print(f"\nTrue Negatives  : {tn}")
+    print(f"False Positives : {fp}")
+    print(f"False Negatives : {fn}")
+    print(f"True Positives  : {tp}")
+
+    # ---------------------------------------------------------
+    # 8. Classification report
+    # ---------------------------------------------------------
+
+    print("\n" + "-" * 70)
+    print("CLASSIFICATION REPORT")
+    print("-" * 70)
+
     print(
         classification_report(
             y_test,
             y_pred,
-            target_names=["No Churn", "Churn"],
-            digits=4,
+            target_names=["Stayed", "Churned"],
             zero_division=0,
         )
     )
-    return y_pred, y_proba
 
+    # ---------------------------------------------------------
+    # 9. Compare threshold 0.50 vs optimized threshold
+    # ---------------------------------------------------------
 
-def plot_all(X_test, y_test, y_pred, y_proba, threshold):
-    fig = plt.figure(figsize=(18, 12))
-    gs = fig.add_gridspec(2, 3, hspace=0.38, wspace=0.32)
+    y_pred_default = (y_proba >= 0.50).astype(int)
 
-    # 1. Confusion matrix
-    ax1 = fig.add_subplot(gs[0, 0])
-    cm = confusion_matrix(y_test, y_pred)
-    disp = ConfusionMatrixDisplay(cm, display_labels=["No Churn", "Churn"])
-    disp.plot(ax=ax1, colorbar=False)
-    ax1.set_title("Confusion Matrix")
-
-    # 2. ROC curve
-    ax2 = fig.add_subplot(gs[0, 1])
-    fpr, tpr, _ = roc_curve(y_test, y_proba)
-    auc = roc_auc_score(y_test, y_proba)
-    ax2.plot(fpr, tpr, lw=2, label=f"AUC = {auc:.4f}")
-    ax2.plot([0, 1], [0, 1], "--", lw=1)
-    ax2.set_xlabel("False Positive Rate")
-    ax2.set_ylabel("True Positive Rate")
-    ax2.set_title("ROC Curve")
-    ax2.legend()
-
-    # 3. Precision-recall curve
-    ax3 = fig.add_subplot(gs[0, 2])
-    precision, recall, _ = precision_recall_curve(y_test, y_proba)
-    ap = average_precision_score(y_test, y_proba)
-    ax3.plot(recall, precision, lw=2, label=f"AP = {ap:.4f}")
-    ax3.axhline(y_test.mean(), linestyle="--", label="Baseline")
-    ax3.set_xlabel("Recall")
-    ax3.set_ylabel("Precision")
-    ax3.set_title("Precision-Recall Curve")
-    ax3.legend()
-
-    # 4. Calibration curve
-    ax4 = fig.add_subplot(gs[1, 0])
-    frac_pos, mean_pred = calibration_curve(y_test, y_proba, n_bins=12)
-    ax4.plot(mean_pred, frac_pos, "o-", lw=2, label="Model")
-    ax4.plot([0, 1], [0, 1], "--", label="Perfect")
-    ax4.set_xlabel("Mean Predicted Probability")
-    ax4.set_ylabel("Fraction Positive")
-    ax4.set_title("Calibration Curve")
-    ax4.legend()
-
-    # 5. Score distribution
-    ax5 = fig.add_subplot(gs[1, 1])
-    ax5.hist(y_proba[y_test == 0], bins=50, alpha=0.65, label="No Churn", density=True)
-    ax5.hist(y_proba[y_test == 1], bins=50, alpha=0.65, label="Churn", density=True)
-    ax5.axvline(threshold, linestyle="--", lw=2, label=f"Threshold = {threshold:.2f}")
-    ax5.set_xlabel("Predicted Churn Probability")
-    ax5.set_ylabel("Density")
-    ax5.set_title("Score Distribution by Class")
-    ax5.legend()
-
-    # 6. Threshold analysis on the test set is descriptive only.
-    # It does NOT select or save a new threshold from test data.
-    ax6 = fig.add_subplot(gs[1, 2])
-    thresholds = np.linspace(0.10, 0.90, 81)
-    f1s, precs, recs = [], [], []
-    for t in thresholds:
-        pred = (y_proba >= t).astype(int)
-        f1s.append(f1_score(y_test, pred, zero_division=0))
-        precs.append(precision_score(y_test, pred, zero_division=0))
-        recs.append(recall_score(y_test, pred, zero_division=0))
-
-    ax6.plot(thresholds, f1s, lw=2, label="F1")
-    ax6.plot(thresholds, precs, lw=2, label="Precision")
-    ax6.plot(thresholds, recs, lw=2, label="Recall")
-    ax6.axvline(
-        threshold,
-        linestyle="--",
-        lw=2,
-        label=f"Selected threshold = {threshold:.2f}",
+    default_f1 = f1_score(
+        y_test,
+        y_pred_default,
+        zero_division=0,
     )
-    ax6.set_xlabel("Threshold")
-    ax6.set_ylabel("Score")
-    ax6.set_title("Threshold Analysis (Descriptive)")
-    ax6.legend(fontsize=8)
 
-    fig.suptitle("Final Test Evaluation — Tuned XGBoost", fontsize=15, fontweight="bold")
-    fig.savefig(FIG_DIR / "11_model_evaluation.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  Saved reports/figures/11_model_evaluation.png")
+    default_precision = precision_score(
+        y_test,
+        y_pred_default,
+        zero_division=0,
+    )
 
+    default_recall = recall_score(
+        y_test,
+        y_pred_default,
+        zero_division=0,
+    )
 
-def run_evaluation():
-    model, X_test, y_test, threshold = load_artifacts()
-    y_pred, y_proba = full_evaluation(model, X_test, y_test, threshold)
-    plot_all(X_test, y_test, y_pred, y_proba, threshold)
-    print("\n  Threshold source: 5-fold out-of-fold training optimization")
-    print("  Test set was not used to select or overwrite the threshold.")
+    print("\n" + "=" * 70)
+    print("⚖️ THRESHOLD COMPARISON")
+    print("=" * 70)
+
+    print("\nDefault threshold = 0.50")
+    print(f"F1        : {default_f1:.4f}")
+    print(f"Precision : {default_precision:.4f}")
+    print(f"Recall    : {default_recall:.4f}")
+
+    print(f"\nOptimized threshold = {threshold:.2f}")
+    print(f"F1        : {f1:.4f}")
+    print(f"Precision : {precision:.4f}")
+    print(f"Recall    : {recall:.4f}")
+
+    print(f"\nF1 difference: {f1 - default_f1:+.4f}")
+
+    # ---------------------------------------------------------
+    # 10. Save final metrics
+    # ---------------------------------------------------------
+
+    metrics = {
+        "model": type(model).__name__,
+        "threshold": threshold,
+        "accuracy": round(float(accuracy), 4),
+        "precision": round(float(precision), 4),
+        "recall": round(float(recall), 4),
+        "f1": round(float(f1), 4),
+        "roc_auc": round(float(roc_auc), 4),
+        "true_negative": int(tn),
+        "false_positive": int(fp),
+        "false_negative": int(fn),
+        "true_positive": int(tp),
+        "default_threshold": 0.50,
+        "default_f1": round(float(default_f1), 4),
+        "default_precision": round(float(default_precision), 4),
+        "default_recall": round(float(default_recall), 4),
+        "evaluation_dataset": "untouched test set",
+    }
+
+    # Save JSON-like joblib artifact
+    joblib.dump(
+        metrics,
+        MODEL_DIR / "final_test_metrics.joblib",
+    )
+
+    # Save CSV
+    metrics_df = pd.DataFrame([metrics])
+
+    metrics_df.to_csv(
+        REPORT_DIR / "final_test_metrics.csv",
+        index=False,
+    )
+
+    print("\n" + "=" * 70)
+    print("✅ FINAL EVALUATION COMPLETE")
+    print("=" * 70)
+
+    print("\nSaved files:")
+    print("  models/final_test_metrics.joblib")
+    print("  reports/final_test_metrics.csv")
+
+    print("\n⚠️ Important:")
+    print("The test set was NOT used for model selection.")
+    print("The test set was NOT used for threshold selection.")
+
+    return metrics
 
 
 if __name__ == "__main__":
-    run_evaluation()
+    evaluate_final_model()
